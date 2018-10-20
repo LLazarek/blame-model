@@ -17,16 +17,17 @@
   [e (e e)
      (if e e e)
      (op e e)
-     v
+     v/labeled
      x
      meta-e]
-  [meta-e (to-label L e)
-          (to-label/fn L (l L) e)]
+  [meta-e (labeled L e)
+          (to-label/fn L (l L) e)
+          (to-label/if L e)]
+  [v/labeled (labeled L v)]
   [v (λ x e)
      number
      #t
-     #f
-     (labeled L v)]
+     #f]
   [x variable-not-otherwise-mentioned]
   [L l
      (op L L)
@@ -42,7 +43,8 @@
      (E e)
      (v E)
      (if E e e)
-     (to-label L E)
+     (labeled L E)
+     (to-label/if L E)
      (to-label/fn L (l L) E)]
 
   #:binding-forms (λ x e #:refers-to x))
@@ -68,12 +70,18 @@
   [(labels-in/L (∘ L_1 L_2))
    (∪ (labels-in/L L_1)
       (labels-in/L L_2))]
+  [(labels-in/L (op L_1 L_L))
+   (∪ (labels-in/L L_1)
+      (labels-in/L L_2))]
   [(labels-in/L l)
    (l)])
 (define-metafunction taint-lang
   labels-in/e : e -> (l ...)
-  [(labels-in/e (to-label L e))
+  [(labels-in/e (labeled L e))
    (∪ (labels-in/L L) (labels-in/e e))]
+  [(labels-in/e (to-label/if L_1 e))
+   (∪ (labels-in/L L_1)
+      (labels-in/e e))]
   [(labels-in/e (to-label/fn L_1 (l L_2) e))
    (∪ (labels-in/L L_1)
       (labels-in/L L_2)
@@ -90,14 +98,7 @@
    (l_1 ...)]
   [(∪) ()])
 
-(require (for-syntax syntax/parse))
-(define-syntax (define-builtin-metafunction stx)
-  (syntax-parse stx
-    [(_ name op-nonterminal operator ...)
-     #'(define-metafunction taint-lang
-         name : (op-nonterminal v v) -> v
-         [(name (operator v_1 v_2))
-          (apply operator (term (v_1 v_2)))] ...)]))
+
 (define-metafunction taint-lang
   δ : (op v v) -> v
   [(δ (+ v_1 v_2))
@@ -108,25 +109,23 @@
    ,(or (term v_1) (term v_2))]
   [(δ (and v_1 v_2))
    ,(and (term v_1) (term v_2))])
-;; (define-builtin-metafunction δ op
-;;   + - or and)
 
+;; taint-red-->> goes from e --> v/labeled
 (define taint-red
   (reduction-relation
    taint-lang
-   (==> (to-label L_2 (labeled L_1 v))
+   (==> (labeled L_2 (labeled L_1 v))
         (labeled (∘ L_1 L_2) v)
         extend-trace)
-   (==> (to-label L v)
-        (labeled L v)
-        add-label)
 
-   (==> (if (labeled L_1 #t) (labeled L_2 e_2) e_3)
-        (to-label (if L_1 L_2) e_2)
+   (==> (if (labeled L #t) e_2 e_3)
+        (to-label/if L e_2)
         if-true)
-   (==> (if (labeled L_1 #f) e_2 (labeled L_3 e_3))
-        (to-label (if L_1 L_3) e_3)
+   (==> (if (labeled L #f) e_2 e_3)
+        (to-label/if L e_3)
         if-false)
+   (==> (to-label/if L_1 (labeled L_2 v))
+        (labeled (if L_1 L_2) v))
 
    (==> ((labeled L_1 (λ x e)) (labeled L_2 v))
         (to-label/fn L_1 (l L_2) (substitute e x (labeled l v)))
@@ -146,20 +145,9 @@
 
 
 (module+ test
-  (define-syntax (test-taint-red stx)
-    (syntax-parse stx
-      #:datum-literals (-->>)
-      [(_ t1 -->> t2)
-       (syntax/loc stx
-         (test-->> taint-red (term t1) (term t2)))]))
-
-
-  (test-taint-red (to-label a 1)
-                  -->>
-                  (labeled a 1))
-  (test-taint-red (to-label a (labeled b 1))
-                  -->>
-                  (labeled (∘ b a) 1))
+  (test-->> taint-red
+            (term (labeled a (labeled b 1)))
+            (term (labeled (∘ b a) 1)))
 
   (test-->> taint-red
             (term (+ (labeled a 1) (labeled b 2)))
@@ -182,7 +170,19 @@
             (term (labeled (if a c) -1)))
 
   (test-->> taint-red
+            (term ((labeled a (λ x x)) (labeled b #t)))
+            (term (labeled (fn a (k b) ⟶ k) #t)))
+  (test-->> taint-red
+            (term ((labeled k (λ x x)) (labeled j #t)))
+            (term (labeled (fn k (i j) ⟶ i) #t)))
+
+  (test-->> taint-red
             (term ((labeled a (λ x (+ x
                                     (labeled b 2))))
                  (labeled c 3)))
-            (term (labeled (fn a (k c) ⟶ (+ k b)) 5))))
+            (term (labeled (fn a (k c) ⟶ (+ k b)) 5)))
+  (test-->> taint-red
+            (term ((labeled a (λ x (+ x
+                                    (labeled b 2))))
+                 (labeled (if c (- d b)) 3)))
+            (term (labeled (fn a (k (if c (- d b))) ⟶ (+ k b)) 5))))

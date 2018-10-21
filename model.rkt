@@ -1,12 +1,5 @@
 #lang racket
 
-;; wiw: trying to work out the kinks in the reduction relation below.
-;; Just tried (and doesn't work)
-#;(traces taint-red
-          (term ((labeled a (λ x (+ x
-                                    (labeled b 2))))
-                 (labeled c 3))))
-
 (require redex)
 
 (module+ test
@@ -35,14 +28,17 @@
      (if L L)
      (∘ L L)]
   [l #;label
-     a b c d e f g h i j k]
+     a b c d e f g h i j k m n o p q r s t u v w
+     arg9 arg8 arg7 arg6 arg5 arg4 arg3 arg2 arg1 arg0]
   [op + -
       or and]
 
   [E hole
      (E e)
-     (v E)
+     (v/labeled E)
      (if E e e)
+     (op E e)
+     (op v/labeled E)
      (labeled L E)
      (to-label/if L E)
      (to-label/fn L (l L) E)]
@@ -52,7 +48,10 @@
 (define-metafunction taint-lang
   label-not-present-in : L L e -> l
   [(label-not-present-in L_1 L_2 e)
-   ,(first (set-subtract (term (a b c d e f g h i j k))
+   ,(first (set-subtract (term (a b c d e f g h i j k m n
+                                  o p q r s t u v w
+                                  arg9 arg8 arg7 arg6 arg5
+                                  arg4 arg3 arg2 arg1 arg0))
                          (term (labels-in/L L_1))
                          (term (labels-in/L L_2))
                          (term (labels-in/e e))))])
@@ -145,6 +144,9 @@
 
 
 (module+ test
+  ;; lltodo: want to have these tests not really depend on what label
+  ;; is picked for functions
+
   (test-->> taint-red
             (term (labeled a (labeled b 1)))
             (term (labeled (∘ b a) 1)))
@@ -171,18 +173,52 @@
 
   (test-->> taint-red
             (term ((labeled a (λ x x)) (labeled b #t)))
-            (term (labeled (fn a (k b) ⟶ k) #t)))
+            (term (labeled (fn a (arg0 b) ⟶ arg0) #t)))
   (test-->> taint-red
             (term ((labeled k (λ x x)) (labeled j #t)))
-            (term (labeled (fn k (i j) ⟶ i) #t)))
+            (term (labeled (fn k (arg0 j) ⟶ arg0) #t)))
 
   (test-->> taint-red
             (term ((labeled a (λ x (+ x
                                     (labeled b 2))))
                  (labeled c 3)))
-            (term (labeled (fn a (k c) ⟶ (+ k b)) 5)))
+            (term (labeled (fn a (arg0 c) ⟶ (+ arg0 b)) 5)))
   (test-->> taint-red
             (term ((labeled a (λ x (+ x
                                     (labeled b 2))))
                  (labeled (if c (- d b)) 3)))
-            (term (labeled (fn a (k (if c (- d b))) ⟶ (+ k b)) 5))))
+            (term (labeled (fn a (arg0 (if c (- d b))) ⟶ (+ arg0 b))
+                           5)))
+  (test-->> taint-red
+            (term ((labeled (if a (fn e (arg0 g) ⟶ arg0))
+                            (λ x (+ x (labeled b 2))))
+                 (labeled (if c (- d b)) 3)))
+            (term (labeled (fn (if a (fn e (arg0 g) ⟶ arg0))
+                             (arg1 (if c (- d b)))
+                             ⟶ (+ arg1 b))
+                           5)))
+
+  (test-->> taint-red
+            (term ((labeled a (λ x x))
+                   (if (labeled b #t) (labeled c 1) (labeled d 2))))
+            (term (labeled (fn a (arg0 (if b c)) ⟶ arg0) 1)))
+  (test-->> taint-red
+            (term ((labeled a (λ x x))
+                   (+ (labeled c 1) (labeled d 2))))
+            (term (labeled (fn a (arg0 (+ c d)) ⟶ arg0) 3)))
+
+  (test-->> taint-red
+            (term ((if (labeled a #t)
+                       ((labeled f (λ x x))
+                        (labeled g (λ y (+ y (labeled m 2)))))
+                       (labeled h 1))
+                   (if (labeled c #f)
+                       (labeled d -3)
+                       (- (labeled e 5) (labeled i 2)))))
+            (term (labeled (fn (if a (fn f (arg0 g) ⟶ arg0))
+                             (arg1 (if c (- e i)))
+                             ⟶ (+ arg1 m))
+                           5))))
+
+;; wiw: model is working.
+;; Need to come up with what distance means in this context.

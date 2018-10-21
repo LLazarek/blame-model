@@ -222,3 +222,49 @@
 
 ;; wiw: model is working.
 ;; Need to come up with what distance means in this context.
+
+(define-metafunction taint-lang
+  distance : L L L -> number
+  [(distance (∘ L_1 L_2) L_1 L_2)
+   1]
+  [(distance (∘ L_10 L_20) L_1 L_2)
+   ,(cond [(and (label-appears-in L_1 L_10))
+           ;; wiw:
+           ])]
+  [(distance (op l_1 l_2) l_1 l_2)
+   1]
+  [(distance (if L))])
+(module+ test
+  (check-equal? (term (distance (∘ a b) a b))
+                1)
+  (check-equal? (term (distance (+ a b) a b))
+                1)
+  (check-equal? (term (distance (- a b) a b))
+                1)
+  (check-equal? (term (distance (and a b) a b))
+                1)
+
+  (check-equal? (term (distance (if a b) a b))
+                2)
+  (check-equal? (term (distance (if (and a b) c) a c))
+                3)
+  (check-equal? (term (distance (if (and a b) (+ c d)) a c))
+                4)
+
+  (check-equal? (term (distance (fn f (arg0 a) ⟶ arg0) a f))
+                2)
+  (check-equal? (term (distance (fn f (arg0 (and a b)) ⟶ arg0) a f))
+                3)
+  (check-equal? (term (distance (fn f (arg0 (and a b)) ⟶ (or arg0 c)) a c))
+                4)
+
+  (check-equal? (term (distance (∘ a (fn f (arg0 (if b (+ c d)))
+                                         ⟶ (fn g (arg1 arg0)
+                                               ⟶ (+ arg1 e))))
+                                a b))
+                5)
+  (check-equal? (term (distance (∘ a (fn f (arg0 (if b (+ c d)))
+                                         ⟶ (fn g (arg1 arg0)
+                                               ⟶ (+ arg1 e))))
+                                e d))
+                6))

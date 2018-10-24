@@ -219,21 +219,16 @@
                              (arg1 (if c (- e i)))
                              ⟶ (+ arg1 m))
                            5))))
-
-;; wiw: model is working.
+#|
 ;; Need to come up with what distance means in this context.
-
 (define-metafunction taint-lang
   distance : L L L -> number
   [(distance (∘ L_1 L_2) L_1 L_2)
    1]
-  [(distance (∘ L_10 L_20) L_1 L_2)
-   ,(cond [(and (label-appears-in L_1 L_10))
-           ;; wiw:
-           ])]
-  [(distance (op l_1 l_2) l_1 l_2)
+  [(distance (op L_1 L_2) L_1 L_2)
    1]
-  [(distance (if L))])
+  [(distance (∘ L_10 L_20) L_1 L_2)
+   ])
 (module+ test
   (check-equal? (term (distance (∘ a b) a b))
                 1)
@@ -268,3 +263,7 @@
                                                ⟶ (+ arg1 e))))
                                 e d))
                 6))
+
+|#
+
+;; idea: just compare size of trees

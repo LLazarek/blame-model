@@ -21,13 +21,13 @@
      number
      #t
      #f]
-  [x variable-not-otherwise-mentioned]
+  [(x l) variable-not-otherwise-mentioned]
   [L l
      (op L L)
      (fn L (l L) ⟶ L)
      (if L L)
      (∘ L L)]
-  [l #;label
+  #;[l #;label
      a b c d e f g h i j k m n o p q r s t u v w
      arg9 arg8 arg7 arg6 arg5 arg4 arg3 arg2 arg1 arg0]
   [op + -
@@ -43,7 +43,7 @@
      (to-label/if L E)
      (to-label/fn L (l L) E)]
 
-  #:binding-forms (λ x e #:refers-to x))
+  #:binding-forms (λ x e #:refers-to x) (fn L (l L) ⟶ L #:refers-to l))
 
 (define-metafunction taint-lang
   label-not-present-in : L L e -> l
@@ -267,3 +267,7 @@
 |#
 
 ;; idea: just compare size of trees
+
+(define-judgment-form taint-lang
+  #:mode (linearize I O)
+  )

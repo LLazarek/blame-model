@@ -26,7 +26,9 @@
      (op L L)
      (fn L (l L) ⟶ L)
      (if L L)
-     (∘ L L)]
+     (∘ L L)
+     (seq ls)]
+  [ls (l ...)]
   #;[l #;label
      a b c d e f g h i j k m n o p q r s t u v w
      arg9 arg8 arg7 arg6 arg5 arg4 arg3 arg2 arg1 arg0]
@@ -43,7 +45,7 @@
      (to-label/if L E)
      (to-label/fn L (l L) E)]
 
-  #:binding-forms (λ x e #:refers-to x) (fn L (l L) ⟶ L #:refers-to l))
+  #:binding-forms (λ x e #:refers-to x) (fn L_1 (l L_2) ⟶ L_3 #:refers-to l))
 
 (define-metafunction taint-lang
   label-not-present-in : L L e -> l
@@ -268,6 +270,52 @@
 
 ;; idea: just compare size of trees
 
+(define-metafunction taint-lang
+  concat : ls ls -> ls
+  [(concat (l_1 ...) (l_2 ...))
+   (l_1 ... l_2 ...)])
+
+(define-metafunction taint-lang
+  reverse : ls -> ls
+  [(reverse (l_1 l_2 ...))
+   (append (reverse (l_2 ...)) l_1)]
+  [(reverse (l))
+   (l)]
+  [(reverse ())
+   ()])
+
+(define-metafunction taint-lang
+  append : ls l -> ls
+  [(append (l_1 ...) l_2)
+   (l_1 ... l_2)])
+
+
 (define-judgment-form taint-lang
   #:mode (linearize I O)
-  )
+  #:contract (linearize L ls)
+  [(linearize L_1 ls_1)
+   (linearize L_2 ls_2)
+   (linearize (substitute L_3
+                          l
+                          (seq (concat ls_2 (reverse ls_1))))
+              ls_3)
+   ---
+   (linearize (fn L_1 (l L_2) ⟶ L_3)
+              (concat ls_3 ls_1))]
+  [(linearize L_1 ls_1)
+   (linearize L_2 ls_2)
+   ---
+   (linearize (if L_1 L_2)
+              (concat ls_1 ls_2))]
+  [(linearize L_1 ls_1)
+   (linearize L_2 ls_2)
+   ---
+   (linearize (∘ L_1 L_2) (concat ls_1 ls_2))]
+  [(linearize L_1 ls_1)
+   (linearize L_2 ls_2)
+   ---
+   (linearize (op L_1 L_2) (concat ls_1 ls_2))]
+  [---
+   (linearize l (l))]
+  [---
+   (linearize (seq ls) ls)])

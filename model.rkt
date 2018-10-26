@@ -1,6 +1,8 @@
 #lang racket
 
-(require redex)
+(require redex
+         racket/match
+         redex/reduction-semantics)
 
 (module+ test
   (require rackunit))
@@ -21,14 +23,15 @@
      number
      #t
      #f]
-  [(x l arg) variable-not-otherwise-mentioned]
+  [(x l arg f) variable-not-otherwise-mentioned]
   [L l
      (op L L)
      (fn L (l L) ⟶ L)
      (if L L)
      (∘ L L)
-     (seq ls)]
-  [ls (l ...)]
+     ;; seq is just there so that an ls can be an L for linearize
+     (seq ls)
+     op]
   #;[l #;label
      a b c d e f g h i j k m n o p q r s t u v w
      arg9 arg8 arg7 arg6 arg5 arg4 arg3 arg2 arg1 arg0]
@@ -45,7 +48,28 @@
      (to-label/if L E)
      (to-label/fn L (l L) E)]
 
-  #:binding-forms (λ x e #:refers-to x) (fn L_1 (l L_2) ⟶ L_3 #:refers-to l))
+
+  ;; linearization terms
+  [ls (l ... => l ...)
+      ls/simple]
+  [ls/simple (=> l ...)]
+
+  ;; compilation
+  [e/unlabeled e
+               (e/unlabeled e/unlabeled)
+               (if e/unlabeled e/unlabeled e/unlabeled)
+               (op e/unlabeled e/unlabeled)
+               v
+               x]
+  [def/unlabeled (define (f x) e/unlabeled)]
+  [P/unlabeled {def/unlabeled ... e/unlabeled}]
+
+  [P {def ... e}]
+  [def (define (f x) e)]
+
+  #:binding-forms
+  (λ x e #:refers-to x)
+  (fn L_1 (l L_2) ⟶ L_3 #:refers-to l))
 
 ;; Compare expressions modulo alpha equivalence
 (default-language taint-lang)
@@ -61,16 +85,6 @@
                          (term (labels-in/L L_1))
                          (term (labels-in/L L_2))
                          (term (labels-in/e e))))])
-#;(define-metafunction taint-lang
-  label-not-present-in/e : e e -> l
-  [(label-not-present-in/e e_1 e_2)
-   ;; ,(first (set-subtract (term (a b c d e f g h i j k m n
-   ;;                                o p q r s t u v w
-   ;;                                arg9 arg8 arg7 arg6 arg5
-   ;;                                arg4 arg3 arg2 arg1 arg0))
-   ;;                       (term (labels-in/e e_1))
-   ;;                       (term (labels-in/e e_2))))
-   ,(variable-not-in (term (e_1 e_2)) (term arg))])
 
 (define-metafunction taint-lang
   labels-in/L : L -> (l ...)
@@ -243,133 +257,224 @@
                              (arg0 (if c (- e i)))
                              ⟶ (+ arg0 m))
                            5))))
-#|
-;; Need to come up with what distance means in this context.
-(define-metafunction taint-lang
-  distance : L L L -> number
-  [(distance (∘ L_1 L_2) L_1 L_2)
-   1]
-  [(distance (op L_1 L_2) L_1 L_2)
-   1]
-  [(distance (∘ L_10 L_20) L_1 L_2)
-   ])
-(module+ test
-  (check-equal? (term (distance (∘ a b) a b))
-                1)
-  (check-equal? (term (distance (+ a b) a b))
-                1)
-  (check-equal? (term (distance (- a b) a b))
-                1)
-  (check-equal? (term (distance (and a b) a b))
-                1)
-
-  (check-equal? (term (distance (if a b) a b))
-                2)
-  (check-equal? (term (distance (if (and a b) c) a c))
-                3)
-  (check-equal? (term (distance (if (and a b) (+ c d)) a c))
-                4)
-
-  (check-equal? (term (distance (fn f (arg0 a) ⟶ arg0) a f))
-                2)
-  (check-equal? (term (distance (fn f (arg0 (and a b)) ⟶ arg0) a f))
-                3)
-  (check-equal? (term (distance (fn f (arg0 (and a b)) ⟶ (or arg0 c)) a c))
-                4)
-
-  (check-equal? (term (distance (∘ a (fn f (arg0 (if b (+ c d)))
-                                         ⟶ (fn g (arg1 arg0)
-                                               ⟶ (+ arg1 e))))
-                                a b))
-                5)
-  (check-equal? (term (distance (∘ a (fn f (arg0 (if b (+ c d)))
-                                         ⟶ (fn g (arg1 arg0)
-                                               ⟶ (+ arg1 e))))
-                                e d))
-                6))
-
-|#
-
-;; idea: just compare size of trees
 
 (define-metafunction taint-lang
-  concat : ls ls -> ls
-  [(concat (l_1 ...) (l_2 ...))
-   (l_1 ... l_2 ...)])
+  reverse : ls/simple -> ls/simple
+  [(reverse (=> l_1 l_2 ...))
+   (extend (reverse (=> l_2 ...)) l_1)]
+  [(reverse (=> l))
+   (=> l)]
+  [(reverse (=>))
+   (=>)])
 
 (define-metafunction taint-lang
-  reverse : ls -> ls
-  [(reverse (l_1 l_2 ...))
-   (append (reverse (l_2 ...)) l_1)]
-  [(reverse (l))
-   (l)]
-  [(reverse ())
-   ()])
+  extend : ls l -> ls
+  [(extend (l_1a ... => l_1b ...) l_2)
+   (l_1a ... => l_1b ... l_2)])
 
 (define-metafunction taint-lang
-  append : ls l -> ls
-  [(append (l_1 ...) l_2)
-   (l_1 ... l_2)])
+  append : ls ls/simple -> ls
+  [(append (l_1a ... => l_1b ...) (=> l_2b ...))
+   (l_1a ... => l_1b ... l_2b ...)])
+
+(define-metafunction taint-lang
+  prepend : ls ls -> ls
+  [(prepend ls_1 ls_2)
+   (reverse (append (reverse ls_2) (reverse ls_1)))])
 
 
 (define-judgment-form taint-lang
   #:mode (linearize I O)
   #:contract (linearize L ls)
-  [(linearize L_1 ls_1)
+  [(linearize L_1 (l_1a ... => l_1b ...))
    (linearize L_2 ls_2)
    (linearize (substitute L_3
                           l
-                          (seq (concat ls_2 (reverse ls_1))))
-              ls_3)
+                          (seq (append ls_2 (reverse (=> l_1b ...)))))
+              (l_3a ... => l_3b ...))
    ---
    (linearize (fn L_1 (l L_2) ⟶ L_3)
-              (concat ls_3 ls_1))]
-  [(linearize L_1 ls_1)
+              (l_1a ... l_3a ... => l_3b ... l_1b ...))]
+
+  [(linearize L_1 (l_1a ... => l_1b ...))
    (linearize L_2 ls_2)
    ---
    (linearize (if L_1 L_2)
-              (concat ls_1 ls_2))]
+              (prepend ls_2 (=> l_1a ... l_1b ...)))]
+
   [(linearize L_1 ls_1)
    (linearize L_2 ls_2)
+   (where/error (=> l_1b ...) ls_1)
+   (where/error (=> l_2b ...) ls_2)
    ---
-   (linearize (∘ L_1 L_2) (concat ls_1 ls_2))]
-  [(linearize L_1 ls_1)
-   (linearize L_2 ls_2)
+   (linearize (∘ L_1 L_2) (=> l_1b ... l_2b ...))]
+
+  [(linearize L_1 (l_1a ... => l_1b ...))
+   (linearize L_2 (l_2a ... => l_2b ...))
    ---
-   (linearize (op L_1 L_2) (concat ls_1 ls_2))]
+   (linearize (op L_1 L_2) (l_1a ... l_1b ... l_2a ... l_2b ... => op))]
+
   [---
-   (linearize l (l))]
+   (linearize l (=> l))]
+
   [---
    (linearize (seq ls) ls)])
 
+
+(module+ test
+  ;; linearize sanity check
+  (check-equal?
+   (apply-reduction-relation*
+    linearize
+    (term (fn (∘ g t) (arg1 (fn (∘ m t) (arg0 t)
+                                ⟶ (∘ f m)))
+              ⟶
+              (fn arg1 (arg0 g)
+                  ⟶
+                  (fn (∘ i f) (arg1 arg0)
+                      ⟶
+                      arg1)))))
+   (list (term (=> g g t t m m f f i i f f m m t t g g t)))))
+
+
+(define-metafunction taint-lang
+  auto-label : P/unlabeled -> P
+  [(auto-label {e/unlabeled})
+   {(propogate-label top e/unlabeled #t)}]
+  [(auto-label {(define (f x) e/unlabeled_1) def/unlabeled ... e/unlabeled})
+   {(define (f x) (propogate-label f e/unlabeled_1 #f))
+    ,@(term (auto-label {def/unlabeled ... e/unlabeled}))}])
+
+(define-metafunction taint-lang
+  ;;                               ,-- top label?
+  propogate-label : l e/unlabeled v -> e
+  [(propogate-label l (labeled L e/unlabeled) #t)
+   (labeled l (labeled L e/unlabeled))]
+  [(propogate-label l v v_top?)
+   (labeled l v)]
+  [(propogate-label l x #f)
+   x]
+  [(propogate-label l x #t)
+   (labeled l x)]
+  [(propogate-label l (e/unlabeled_1 e/unlabeled_2) v_top?)
+   ((propogate-label l e/unlabeled_1 v_top?)
+    (propogate-label l e/unlabeled_2 v_top?))]
+  [(propogate-label l (if e/unlabeled_1 e/unlabeled_2 e/unlabeled_3) v_top?)
+   (if (propogate-label l e/unlabeled_1 v_top?)
+       (propogate-label l e/unlabeled_2 v_top?)
+       (propogate-label l e/unlabeled_3 v_top?))]
+  [(propogate-label l (op e/unlabeled_1 e/unlabeled_2) v_top?)
+   (op (propogate-label l e/unlabeled_1 v_top?)
+       (propogate-label l e/unlabeled_2 v_top?))])
+
+(module+ test
+  (check-equal? (term (auto-label {((λ x x) 5)}))
+                '{((labeled top (λ x x))
+                   (labeled top 5))})
+  (check-equal? (term (auto-label {(define (f x) x) (f 5)}))
+                '{(define (f x) x)
+                  ((labeled top f) (labeled top 5))}))
+
+(define-metafunction taint-lang
+  compile : P -> e
+  [(compile {e})
+   e]
+  [(compile {(define (f x) e_body) def ... e})
+   (compile (substitute {def ... e}
+                        f
+                        (labeled f (λ x e_body))))])
+
+(define-metafunction taint-lang
+  compile* : P/unlabeled -> e
+  [(compile* P/unlabeled)
+   (compile (auto-label P/unlabeled))])
+
+(module+ test
+  (check-equal? (term (compile* {((λ x x) 5)}))
+                '((labeled top (λ x x))
+                  (labeled top 5)))
+  (check-equal? (term (compile* {(define (f x) x) (f 5)}))
+                '((labeled top (labeled f (λ x x)))
+                  (labeled top 5)))
+  (check-equal?
+   (term (compile*
+          {(define (add1 x) (+ x 1))
+           (define (f x) (add1 x))
+           (f 5)}))
+   '((labeled
+      top
+      (labeled f (λ x ((labeled add1 (λ x (+ x
+                                             (labeled add1 1))))
+                       x))))
+     (labeled top 5)))
+  (check-true
+   (alpha-equivalent?
+    taint-lang
+    (term (compile*
+           {(define (add1 x) (+ x 1))
+            (define (f x) (add1 x))
+            (define (g h) (λ x (h x)))
+            ((g f) 5)}))
+    '(((labeled top
+                (labeled g (λ h (labeled g (λ x (h x))))))
+       (labeled top
+                (labeled f (λ y ((labeled add1 (λ z (+ z (labeled add1 1))))
+                                 y)))))
+      (labeled top 5)))))
+
+(define (compile-and-run p)
+  (apply-reduction-relation* taint-red
+                             (term (compile* ,p))))
+
+(define value-trace
+  (compose1 first
+            (term-match taint-lang
+                        [(labeled L v) (term L)])))
+
+(define (trace p)
+  (let ([results (compile-and-run p)])
+    (if (empty? results)
+        (error 'trace "Program ~v does not reduce" p)
+        (value-trace (first results)))))
+
+(module+ test
+  (check-equal? (trace (term {(define (f x) x) (f 5)}))
+                '(fn (∘ f top) (arg top) ⟶ arg)))
+
+(define (trace/linear p)
+  (first (apply-reduction-relation* linearize (trace p))))
+
+
+(define-metafunction taint-lang
+  collapse : ls -> ls
+  [(collapse (l_a_a ... l l l_a_b ... => l_b ...))
+   (collapse (l_a_a ... l l_a_b ... => l_b ...))]
+  [(collapse (l_a ... => l_b_a ... l l l_b_b ...))
+   (collapse (l_a ... => l_b_a ... l l_b_b ...))]
+  [(collapse ls)
+   ls])
+
+(define (trace/linear* p)
+  (term (collapse ,(trace/linear p))))
+
 (module+ test
   (check-equal?
-   (apply-reduction-relation*
-    linearize
-    (term (fn (∘ g t) (arg1 (fn (∘ m t) (arg0 t)
-                                ⟶ (∘ f m)))
-              ⟶
-              (fn arg1 (arg0 g)
-                  ⟶
-                  (fn (∘ i f) (arg1 arg0)
-                      ⟶
-                      arg1)))))
-   (list (term (g g t t m m f f i i f f m m t t g g t))))
+   (trace/linear* (term {(define (f x) x) (f 5)}))
+   '(=> top f top))
 
   (check-equal?
-   (apply-reduction-relation*
-    linearize
-    (term (fn (∘ g t) (arg1 (fn (∘ m t) (arg0 t)
-                                ⟶ (∘ f m)))
-              ⟶
-              (fn arg1 (arg0 g)
-                  ⟶
-                  (fn (∘ i f) (arg1 arg0)
-                      ⟶
-                      arg1)))))
-   (list (term (g g t t m m f f i i f f m m t t g g t))))
+   (trace/linear*
+    (term {(define (g h) (h 5))
+           (define (i x) x)
+           (define (f x) (i x))
+           (define (m x) f)
+           (g (m 1))}))
+   '(=> g top m f i f m top g top)))
 
 
+
+
+(module+ test
   ;; lltodo:
   ;; The trace produced by this program is interesting:
   ;; The argument bound here: [[<<A>][link]] is referenced

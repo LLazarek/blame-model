@@ -21,7 +21,7 @@
      number
      #t
      #f]
-  [(x l) variable-not-otherwise-mentioned]
+  [(x l arg) variable-not-otherwise-mentioned]
   [L l
      (op L L)
      (fn L (l L) ⟶ L)
@@ -47,7 +47,11 @@
 
   #:binding-forms (λ x e #:refers-to x) (fn L_1 (l L_2) ⟶ L_3 #:refers-to l))
 
-(define-metafunction taint-lang
+;; Compare expressions modulo alpha equivalence
+(default-language taint-lang)
+
+;; Not used currently, using `fresh` in reduction-relation instead
+#;(define-metafunction taint-lang
   label-not-present-in : L L e -> l
   [(label-not-present-in L_1 L_2 e)
    ,(first (set-subtract (term (a b c d e f g h i j k m n
@@ -57,6 +61,16 @@
                          (term (labels-in/L L_1))
                          (term (labels-in/L L_2))
                          (term (labels-in/e e))))])
+#;(define-metafunction taint-lang
+  label-not-present-in/e : e e -> l
+  [(label-not-present-in/e e_1 e_2)
+   ;; ,(first (set-subtract (term (a b c d e f g h i j k m n
+   ;;                                o p q r s t u v w
+   ;;                                arg9 arg8 arg7 arg6 arg5
+   ;;                                arg4 arg3 arg2 arg1 arg0))
+   ;;                       (term (labels-in/e e_1))
+   ;;                       (term (labels-in/e e_2))))
+   ,(variable-not-in (term (e_1 e_2)) (term arg))])
 
 (define-metafunction taint-lang
   labels-in/L : L -> (l ...)
@@ -128,9 +142,17 @@
    (==> (to-label/if L_1 (labeled L_2 v))
         (labeled (if L_1 L_2) v))
 
-   (==> ((labeled L_1 (λ x e)) (labeled L_2 v))
+   ;; This causes shadowing bindings to be created
+   ;; ⟶ confusing
+   #;(==> ((labeled L_1 (λ x e)) (labeled L_2 v))
         (to-label/fn L_1 (l L_2) (substitute e x (labeled l v)))
         (where l (label-not-present-in L_1 L_2 e))
+        app/wrap)
+   ;; So use builtin fresh instead, which makes fresh labels that
+   ;; aren't present in the whole program (ie including the ctx)
+   (==> ((labeled L_1 (λ x e)) (labeled L_2 v))
+        (to-label/fn L_1 (arg L_2) (substitute e x (labeled arg v)))
+        (fresh arg)
         app/wrap)
    (==> (to-label/fn L_1 (l L_2) (labeled L_3 v))
         (labeled (fn L_1 (l L_2) ⟶ L_3) v)
@@ -196,8 +218,8 @@
                             (λ x (+ x (labeled b 2))))
                  (labeled (if c (- d b)) 3)))
             (term (labeled (fn (if a (fn e (arg0 g) ⟶ arg0))
-                             (arg1 (if c (- d b)))
-                             ⟶ (+ arg1 b))
+                             (arg0 (if c (- d b)))
+                             ⟶ (+ arg0 b))
                            5)))
 
   (test-->> taint-red
@@ -218,8 +240,8 @@
                        (labeled d -3)
                        (- (labeled e 5) (labeled i 2)))))
             (term (labeled (fn (if a (fn f (arg0 g) ⟶ arg0))
-                             (arg1 (if c (- e i)))
-                             ⟶ (+ arg1 m))
+                             (arg0 (if c (- e i)))
+                             ⟶ (+ arg0 m))
                            5))))
 #|
 ;; Need to come up with what distance means in this context.
@@ -319,3 +341,96 @@
    (linearize l (l))]
   [---
    (linearize (seq ls) ls)])
+
+(module+ test
+  (check-equal?
+   (apply-reduction-relation*
+    linearize
+    (term (fn (∘ g t) (arg1 (fn (∘ m t) (arg0 t)
+                                ⟶ (∘ f m)))
+              ⟶
+              (fn arg1 (arg0 g)
+                  ⟶
+                  (fn (∘ i f) (arg1 arg0)
+                      ⟶
+                      arg1)))))
+   (list (term (g g t t m m f f i i f f m m t t g g t))))
+
+  (check-equal?
+   (apply-reduction-relation*
+    linearize
+    (term (fn (∘ g t) (arg1 (fn (∘ m t) (arg0 t)
+                                ⟶ (∘ f m)))
+              ⟶
+              (fn arg1 (arg0 g)
+                  ⟶
+                  (fn (∘ i f) (arg1 arg0)
+                      ⟶
+                      arg1)))))
+   (list (term (g g t t m m f f i i f f m m t t g g t))))
+
+
+  ;; lltodo:
+  ;; The trace produced by this program is interesting:
+  ;; The argument bound here: [[<<A>][link]] is referenced
+  ;; /outside/ of the label of the function's body,
+  ;; here: [[<<B>][link]]
+  ;; How?
+  ;; Basicallly, the function f returns a λ which captures the
+  ;; argument value (and its trace!), and that λ is used later
+  ;; on after the function returns.
+  ;; IE, just as λs can capture values because of substitution,
+  ;; λs can also capture their argument trace bindings.
+  ;;
+  ;; This cannot be resolved by just foregoing the argument relabeling
+  ;; because our linearization rule depends on the knowledge of the
+  ;; argument's labels in order to do the right thing for reversal
+  (test-->>
+   taint-red
+   (term ((labeled (∘ g top) (λ h (h (labeled g 5))))
+          ((labeled
+            (∘ m top)
+            (λ x«115»
+              ((labeled
+                f
+                (λ c«116»
+                  (labeled
+                   f
+                   (λ x«117»
+                     ((if c«116»
+                          (labeled add1 (λ x«118» (+ x«118» (labeled add1 1))))
+                          (labeled i (λ x«119» x«119»)))
+                      x«117»)))))
+               (labeled m #t))))
+           (labeled top 1))))
+   (term (labeled
+          (fn (∘ g top)
+            (arg2 (fn (∘ m top)
+                    (arg top)
+                    ⟶ (fn f
+                        (arg1 m) ;; <<A>>
+                        ⟶ f)))
+            ⟶
+            (fn arg2
+              (arg3 g)
+              ⟶ (fn (if arg1 add1) ;; <<B>>
+                  (arg4 arg3)
+                  ⟶ (+ arg4 add1))))
+          6)))
+
+  ;; here's a simpler program demonstrating the same problem
+  (test-->>
+   taint-red
+   (term (((labeled f (λ z (labeled f (λ y z))))
+           (labeled t 5))
+          (labeled t 0)))
+   (term (labeled (fn (fn f
+                        (arg t)
+                        ⟶ f)
+                    (arg1 t)
+                    ⟶ arg)
+                  5))))
+
+
+(module+ test
+  (test-results))
